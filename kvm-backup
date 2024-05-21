@@ -1,0 +1,71 @@
+#!/bin/bash
+
+trap "exit" INT
+
+#
+# Globals
+#
+
+source ./.repository
+source ./.key
+
+#
+# Imports 
+#
+
+source ./testsuites_kvm-backup --source-only
+
+#
+# Main app body
+#
+
+testsuite_verifyRequirements
+
+if [ -z "$1" ]; then
+	HighPrioServers=("WIL-FOG-SRV" "WIL-GITLAB-SRV" "WIL-KAVITA-SRV" "WIL-LINKDING-SRV" "WIL-MINIFLUX-SRV" "WIL-PLEX-SRV" "WIL-UNIFI-SRV" "WIL-CONSULTING-SRV" "WIL-ITSERVICES-SRV" "WIL-PFSENSE" "WIL-N8N-SRV" "WIL-HA-SRV" "WIL-EMITTER-SRV" "WIL-KDE-SRV")
+	DevServers=("DEV-PYTHON-SRV", "WIL-AOS1-SRV")
+	GameServers=("WIL-MINECRAFT-SRV" "WIL-OPENTTD-SRV" "WIL-STEAM-SRV" "WIL-TERRARIA-SRV" "WIL-GSM-SRV")
+	LabServers=("LAB-10PROTEMP1" "LAB-APP" "LAB-BIZ10PRORET" "LAB-NAS" "LAB-PDC" "LAB-PFSENSE" "LAB-REPO" "LAB-REPOCOMM")
+	LowPrioServers=("WIL-FREEBSD-SRV" "WIL-SIA-SRV" "IMAGE-DEBIAN12" "IMAGE-UBUNTU22.04" "KCS" "WIL-IPFS-SRV" "WIL-MINIO-SRV" "WIL-WEB-SRV" "WIL-WP-SRV" "WIL-NEXTCLOUD-SRV" "WIL-OPENPROJ-SRV" "WIL-PUPPET-SRV")
+	TestServers=("TEST_RUNNINGDISKS" "TEST_RUNNINGNODISKS" "TEST_SHUTOFF")
+
+	for domain in ${HighPrioServers[@]}; do
+		backupVm $domain
+	done
+
+	for domain in ${DevServers[@]}; do
+		backupVm $domain
+	done
+
+	for domain in ${GameServers[@]}; do
+		backupVm $domain
+	done
+
+	for domain in ${LabServers[@]}; do
+		backupVm $domain
+	done
+
+	for domain in ${LowPrioServers[@]}; do
+		backupVm $domain
+	done
+
+	for domain in ${TestServers[@]}; do
+		backupVm $domain
+	done
+else
+	IFS=',' read -ra DOMAINS <<< "$1"
+	for domain in "${DOMAINS[@]}"; do
+		backupVm $domain
+	done
+fi
+
+printAndLog "NA > Printing stats before retention..."
+printAndLog "WARNING > Status function needs work."
+#printStats
+
+#performRetention 48 14 4 3 2
+printAndLog "WARNING > Retention function for Restic needs to be changed to support GPG files instead; no retention will be performed."
+
+printAndLog "NA > Printing stats after retention..."
+printAndLog "WARNING > Status function needs work.
+#printStats

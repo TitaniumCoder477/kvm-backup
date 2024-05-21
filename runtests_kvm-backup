@@ -1,0 +1,28 @@
+#!/bin/bash
+
+trap "exit" INT
+
+#
+# Globals 
+#
+
+export RESTIC_REPOSITORY="sftp:wil-admin@wil-jr-syn:/backups/shalom"
+export RESTIC_PASSWORD="b!gsmil3"
+
+#
+# Imports 
+#
+
+source ./testsuites_kvm-backup --source-only
+
+#
+# Main
+#
+
+testsuite_verifyRequirements
+testsuite_verifyDomainExists
+testsuite_verifyDomainIsRunning
+testsuite_createSnapshot
+testsuite_removeSnapshot
+testsuite_backupVms
+testsuite_performRetention

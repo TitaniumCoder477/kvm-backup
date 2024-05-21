@@ -1,0 +1,115 @@
+#!/bin/bash
+
+#
+# Imports
+#
+
+source ./functions_kvm-backup --source-only
+
+#
+# Unit tests
+#
+
+function test_verifySudoPrivileges {
+	verifySudoPrivileges
+	[ $? -eq 0 ] || throw "Test failed: ${FUNCNAME[0]}" $LINENO
+}
+
+function test_verifyResticSetup {
+	verifyResticSetup
+        [ $? -eq 0 ] || throw "Test failed: ${FUNCNAME[0]}" $LINENO
+}
+
+function test_verifyKvmSetup {
+        verifyKvmSetup
+	[ $? -eq 0 ] || throw "Test failed: ${FUNCNAME[0]}" $LINENO
+}
+
+function test_verifyDomainExistsFalse {
+	domainExists $1 
+       	[ $? -eq 1 ] || throw "Test failed: ${FUNCNAME[0]}" $LINENO
+}
+
+function test_verifyDomainExistsTrue {
+	domainExists $1
+	[ $? -eq 0 ] || throw "Test failed: ${FUNCNAME[0]}" $LINENO
+}
+
+function test_verifyDomainIsRunningFalse {
+	domainIsRunning $1
+       	[ $? -eq 1 ] || throw "Test failed: ${FUNCNAME[0]}" $LINENO
+}
+
+function test_verifyDomainIsRunningTrue {
+	domainIsRunning $1
+       	[ $? -eq 0 ] || throw "Test failed:  ${FUNCNAME[0]}" $LINENO
+}
+
+function test_createSnapshotOfNonExistentVm {
+	createSnapshot $1
+       	[ $? -eq 1 ] || throw "Test failed: ${FUNCNAME[0]}" $LINENO
+}
+
+function test_createSnapshotOfShutoffVm {
+	createSnapshot $1
+       	[ $? -eq 1 ] || throw "Test failed: ${FUNCNAME[0]}" $LINENO
+}
+
+function test_createSnapshotOfRunningVmWithoutDisks {
+	createSnapshot $1
+	[ $? -eq 1 ] || throw "Test failed: ${FUNCNAME[0]}" $LINENO
+}
+
+function test_createSnapshotOfRunningVmWithDisks {
+	createSnapshot $1
+       	[ $? -eq 0 ] || throw "Test failed: ${FUNCNAME[0]}" $LINENO
+}
+
+function test_removeSnapshotFromNonExistentVm {
+	removeSnapshot $1
+       	[ $? -eq 1 ] || throw "Test failed: ${FUNCNAME[0]}" $LINENO
+}
+
+function test_removeSnapshotFromShutoffVm {
+	removeSnapshot $1
+	[ $? -eq 1 ] || throw "Test failed: ${FUNCNAME[0]}" $LINENO
+}
+
+function test_removeSnapshotFromRunningVmWithoutDisks {
+	removeSnapshot $1
+	[ $? -eq 1 ] || throw "Test failed: ${FUNCNAME[0]}" $LINENO
+}
+
+function test_removeSnapshotFromRunningVmWithDisks {
+	removeSnapshot $1
+        [ $? -eq 0 ] || throw "Test failed: ${FUNCNAME[0]}" $LINENO
+}
+
+function test_backupRunningVm {
+	backupRunningVm $1 
+	[ $? -eq 0 ] || throw "Test failed: ${FUNCNAME[0]}" $LINENO
+}
+
+function test_backupShutoffVm {
+	backupShutoffVm $1 
+	[ $? -eq 0 ] || throw "Test failed: ${FUNCNAME[0]}" $LINENO
+}
+
+function test_backupVm {
+	backupVm $1
+	[ $? -eq 0 ] || throw "Test failed: ${FUNCNAME[0]}" $LINENO
+}
+
+function test_backupDiskSources {
+	return 0
+}
+
+function test_backupXml {
+	backupXml $1 
+	[ $? -eq 0 ] || throw "Test failed: ${FUNCNAME[0]}" $LINENO
+}
+
+function test_performRetention {
+	performRetention $1 $2 $3 $4 $5
+	[ $? -eq 0 ] || throw "Test failed: ${FUNCNAME[0]}" $LINENO
+}

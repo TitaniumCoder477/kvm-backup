@@ -1,0 +1,464 @@
+#!/bin/bash
+
+#
+# Globals 
+#
+
+LANG=C.UTF-8
+SCRIPTNAME=kvm-backup
+DISKTARGETS=
+DISKSOURCES=
+
+#
+# Functions
+#
+
+function backupVm {
+	
+	__meetsBackupRequirements $1 || return 1
+	
+	printAndLog "$1 > Obtaining domain disk sources..."
+	if ! storeDomainSourcesInArray $1; then
+		printAndLog "$1 ! No virtual disk devices found."
+		return 1 
+	fi
+
+	domainIsRunning "$1"
+	if [ $? -eq 0 ]; then
+		backupRunningVm "$1"
+		return $?
+	fi
+	
+	domainIsShutoff "$1"
+	if [ $? -eq 0 ]; then
+		backupShutoffVm "$1"
+		return $?
+	fi
+
+	printAndLog "$1 ! Does not appear to be running or shutoff. Aborting."
+	return 1
+}
+
+function backupRunningVm {
+	
+	__meetsRunningVmRequirements $1 || return 1
+
+	sourcesBackedUp=0
+	xmlBackedUp=0
+
+	createSnapshot $1
+	if [ $? -ne 0 ]; then
+	       printAndLog "$1 ! Failed to create snapshot for backup. Skipping this virtual machine."
+	       return 1
+	fi
+
+	backupDiskSources $1
+	if [ $? -ne 0 ]; then
+		printAndLog "$1 ! Failed to backup disk sources. Skipping this domain."
+		# We do not return anything here because we still want to try removing the snapshot and backing up the XML
+		sourcesBackedUp=1
+	fi
+
+	removeSnapshot $1
+	if [ $? -ne 0 ]; then
+		printAndLog "$1 ! Failed to remove snapshot. You will need to manually remediate."
+		return 1
+	fi
+	
+	backupDomainXml $1
+	xmlBackedup=$?
+
+	return $sourcesBackedUp && $xmlBackedup
+}
+
+function backupShutoffVm {
+	
+	__meetsShutoffVmRequirements $1 || return 1
+
+	sourcesBackedUp=0
+	xmlBackedUp=0
+
+	backupDiskSources $1
+	if [ $? -ne 0 ]; then
+		printAndLog "$1 ! Failed to backup disk sources. Skipping this domain."
+		# We do not return anything here because we still want to try backing up the XML
+		sourcesBackedUp=1
+	fi
+
+	backupDomainXml $1
+	xmlBackedUp=$?	
+	
+	return $sourcesBackedUp && $xmlBackedup
+}
+
+function backupDiskSources {
+	
+	__meetsBackupRequirements $1 || return 1
+	
+	DAYOFMONTH=$(date +"%d")
+	MONTHOFYEAR=$(date +"%m")
+	FULLYEAR=$(date +"%Y")
+
+	FULLYQUALIFIEDPATH="$REPOSITORY/$FULLYEAR/$MONTHOFYEAR/$DAYOFMONTH"
+
+	if [ ! -d "$FULLYQUALIFIEDPATH" ]; then
+		mkdir -p "$FULLYQUALIFIEDPATH"
+	fi
+	for disksource in ${DISKSOURCES[@]}; do
+		printAndLog "$1 > Attempting backup of $disksource..."
+		disksourceFilename=$(basename $disksource)
+		gpg -e -r $KEY -o "$FULLYQUALIFIEDPATH/$disksourceFilename.gpg" --encrypt $disksource
+		if [ $? -ne 0 ]; then
+			printAndLog "$1 ! Failed to backup $disksource."
+			return 1
+		fi
+	done
+
+	return 0
+}
+
+function backupDomainXml {
+	
+	__meetsBackupRequirements $1 || return 1
+
+	xmlBackedUp=0
+
+	dumpXml $1
+       	if [ $? -ne 0 ]; then
+		printAndLog "$1 ! Failed to dump the domain XML."
+		return 1
+	fi
+
+	backupXml $1
+       	if [ $? -ne 0 ]; then
+		printAndLog "$1 ! Failed to backup the domain XML."
+		# We do not return anything here because we still want to try cleanup the xml file first
+		xmlBackedUp=1
+	fi
+	
+	cleanupXml $1
+	if [ $? -ne 0 ]; then
+		printAndLog "$1 ! Failed to cleanup the domain XML."
+		return 1
+	fi
+
+	return $xmlBackedUp
+}
+
+function createSnapshot {
+	
+	__meetsRunningVmRequirements $1 || return 1
+	
+	DISKTARGETSPEC=""
+
+	printAndLog "$1 > Obtaining virtual disk devices..."
+	if storeDomainTargetsInArray $1; then
+		printAndLog "$1 > Disks virtual disk devices found. Obtaining details..."
+		for DISKTARGET in ${DISKTARGETS[@]}; do
+			printAndLog "$1 > Disk target found: $DISKTARGET"
+			DISKTARGETSPEC="$DISKTARGETSPEC --diskspec $DISKTARGET,snapshot=external"
+		done
+		printAndLog "$1 > Disk target spec: $DISKTARGETSPEC"
+	else	
+		printAndLog "$1 ! No virtual disk devices found."
+		return 1 
+	fi
+
+	if [ ${#DISKTARGETSPEC} -ne 0 ]; then
+		printAndLog "$1 > Virtual disk device details obtained. Creating snapshot..."
+		virsh snapshot-create-as --domain $1 --name "backup-$1" --no-metadata --atomic --disk-only $DISKTARGETSPEC 1>/dev/null 2>&1
+		if [ $? -ne 0 ]; then
+			printAndLog "$1 ! Failed to create snapshot."
+			return 1 
+		fi	
+	else
+		printAndLog "$1 ! No virtual disk device details found."
+		return 1 
+	fi
+
+	return 0
+}
+
+function removeSnapshot {
+	
+	__meetsRunningVmRequirements $1 || return 1
+
+	if storeDomainTargetsInArray $1; then
+		for DISKTARGET in ${DISKTARGETS[@]}; do
+			printAndLog "$1 > Attempting to merge $DISKTARGET..."
+			
+			fullyQualifiedPathBefore=$(virsh domblklist $1 --details | grep $DISKTARGET | awk '{print $4}')
+			printAndLog "$1 > Disk target before: $fullyQualifiedPathBefore"
+			
+			virsh blockcommit $1 $DISKTARGET --active --pivot 1>/dev/null 2>&1
+			if [ $? -ne 0 ]; then
+				printAndLog "$1 ! Merge failed for $DISKTARGET."
+			else
+				fullyQualifiedPathAfter=$(virsh domblklist $1 --details | grep $DISKTARGET | awk '{print $4}')
+				printAndLog "$1 > Disk target after: $fullyQualifiedPathAfter"
+				if [ "$fullyQualifiedPathAfter" != "$fullyQualifiedPathBefore" ]; then
+					printAndLog "$1 > Attempting removal of $fullyQualifiedPathBefore..."
+					rm -f "$fullyQualifiedPathBefore"
+					if [ $? -eq 0 ]; then
+						printAndLog "$1 > Cleaned up snapshot."
+					else
+						printAndLog "$1 ! Unable to cleanup snapshot."
+					fi
+				else
+					printAndLog "$1 ! Disk target appears the same before and after. Please investigate."
+				fi
+			fi	
+		done
+	else
+		printAndLog "$1 ! Domain has no disks."
+		return 1
+	fi
+
+	return 0
+}
+
+function dumpXml {
+	
+	__meetsBackupRequirements $1 || return 1
+
+	printAndLog "$1 > Dumping XML to /tmp/$1.xml..."
+	virsh dumpxml $1 > "/tmp/$1.xml" 1>/dev/null 2>&1
+	if [ $? -ne 0 ]; then
+		printAndLog "$1 ! Failed to dump XML."
+		return 1
+	fi
+	printAndLog "$1 > Dumped XML to /tmp/$1.xml"
+	return 0
+}
+
+function backupXml {
+	
+	__meetsBackupRequirements $1 || return 1
+
+	DAYOFMONTH=$(date +"%d")
+	MONTHOFYEAR=$(date +"%m")
+	FULLYEAR=$(date +"%Y")
+	
+	FULLYQUALIFIEDPATH="$REPOSITORY/$FULLYEAR/$MONTHOFYEAR/$DAYOFMONTH"
+
+	if [ ! -d "$FULLYQUALIFIEDPATH" ]; then
+		mkdir -p "$FULLYQUALIFIEDPATH"
+	fi
+
+	printAndLog "$1 > Attempting backup of /tmp/$1.xml..."
+	gpg -e -r $KEY -o "$FULLYQUALIFIEDPATH/$1.xml.gpg" --encrypt "/tmp/$1.xml" 
+	if [ $? -ne 0 ]; then
+		printAndLog "$1 ! Failed to backup XML."
+		return 1
+	fi
+	printAndLog "$1 > Backed up XML."
+	return 0
+}
+
+function cleanupXml {
+	
+	__meetsBackupRequirements $1 || return 1
+
+	printAndLog "$1 > Attempting cleanup of /tmp/$1.xml..."
+	rm "/tmp/$1.xml"
+	if [ $? -ne 0 ]; then
+		printAndLog "$1 ! Failed to cleanup XML."
+		return 1
+	fi
+	printAndLog "$1 > Cleaned up XML."
+	return 0
+}
+
+function performRetention {
+	KEEP_HOURLY="$1"
+	KEEP_DAILY="$2"
+	KEEP_WEEKLY="$3"
+	KEEP_MONTHLY="$4"
+	KEEP_YEARLY="$5"
+	verifyResticSetup || return 1
+
+	printAndLog "TODO: performRetention needs to be reworked"
+	return 0
+
+	printAndLog "NA > Attempting retention; keeping $KEEP_HOURLY hourlies, $KEEP_DAILY dailies, $KEEP_WEEKLY weeklies, $KEEP_MONTHLY monthlies, $KEEP_YEARLY yearlies..."
+	restic forget -H $KEEP_HOURLY -d $KEEP_DAILY -w $KEEP_WEEKLY -m $KEEP_MONTHLY -y $KEEP_YEARLY --quiet
+	if [ $? -ne 0 ]; then
+		printAndLog "NA > Problem performing retention."
+		return 1
+	fi
+	printAndLog "NA > Retention completed."
+	return 0
+}
+
+function printStats {
+	verifyResticSetup || return 1
+	printAndLog "TODO: printStats needs to be reworked"
+	return 0
+	restic stats
+	return 0
+}
+
+function domainExists {
+	
+	__meetsParamRequirements $1 || return 1
+
+	virsh list --all | tail -n +3 | awk '{print $2}' | grep "$1" 1>/dev/null
+	return $?
+}
+
+function domainIsRunning {
+	
+	__meetsParamRequirements $1 || return 1
+	__meetsExistenceRequirements $1 || return 1
+
+	state=$(virsh domstate $1)
+	if [ "$state" != 'running' ]; then
+		return 1
+	fi
+	return 0
+}
+
+function domainIsShutoff {
+	
+	__meetsParamRequirements $1 || return 1
+	__meetsExistenceRequirements $1 || return 1
+
+	state=$(virsh domstate $1)
+	if [ "$state" != 'shut off' ]; then
+		return 1
+	fi
+	return 0
+}
+
+function domainHasDisks {
+	
+	__meetsParamRequirements $1 || return 1
+	__meetsExistenceRequirements $1 || return 1
+
+	disks=($(virsh domblklist $1 --details | grep disk | awk '{print $3}'))
+	if [ ${#disks[@]} -eq 0 ]; then
+		return 1
+	fi
+	return 0
+}
+
+function storeDomainTargetsInArray {
+	
+	__meetsParamRequirements $1 || return 1
+	__meetsExistenceRequirements $1 || return 1
+	__meetsHasDisksRequirements $1 || return 1
+
+	DISKTARGETS=($(virsh domblklist $1 --details | grep disk | awk '{print $3}'))
+	return 0
+}
+
+function storeDomainSourcesInArray {
+	
+	__meetsParamRequirements $1 || return 1
+	__meetsExistenceRequirements $1 || return 1
+	__meetsHasDisksRequirements $1 || return 1
+
+	DISKSOURCES=($(virsh domblklist $1 --details | grep disk | awk '{print $4}'))
+	return 0
+}
+
+
+function __meetsExistenceRequirements {
+	
+	if ! domainExists $1; then
+		printAndLog "$1 ! Domain does not exist."
+		return 1
+	fi
+	return 0
+}
+
+function __meetsHasDisksRequirements {
+	
+	if ! domainHasDisks $1; then
+		printAndLog "$1 ! Domain has no disks."
+		return 1	
+	fi
+	return 0
+}
+
+function __meetsRunningVmRequirements {
+	
+	__meetsBackupRequirements $1 || return 1
+
+	if ! domainIsRunning $1; then
+		printAndLog "$1 ! Domain is not running."
+		return 1
+	fi
+	return 0
+}
+
+function __meetsShutoffVmRequirements {
+	
+	__meetsBackupRequirements $1 || return 1
+
+	if ! domainIsShutoff $1; then
+		printAndLog "$1 ! Domain is not shut off."
+		return 1
+	fi
+	return 0
+}
+
+function __meetsBackupRequirements {
+	
+	__meetsParamRequirements $1 || return 1
+	__meetsExistenceRequirements $1 || return 1
+	return 0
+}
+
+function __meetsParamRequirements {
+	
+	if [ ${#1} -eq 0 ]; then
+		printAndLog "Domain passed to ${FUNCNAME[0]} was empty/null"
+		return 1
+	fi
+	return 0
+}
+
+function verifySudoPrivileges {
+	if (( $EUID != 0 )); then
+		printAndLog "Not invoked with sudo privileges. Aborting."
+		return 1
+	fi
+	return 0
+}
+
+function verifyResticSetup {
+	printAndLog "TODO: verifyResticSetup needs to be replaced"
+	return 0
+
+        if ! hash restic 2>/dev/null; then
+                printAndLog "Restic not found. Please double check availability. Aborting."
+		return 1
+        fi
+
+	restic stats
+	if [ $? -ne 0 ]; then
+		printAndLog "Restic unable to check stats on repository. Aborting."
+		return 1
+	fi
+        return 0
+}
+
+function verifyKvmSetup {
+        if ! hash virsh 2>/dev/null; then
+        	printAndLog "Virsh not found. Please double check availability. Aborting."
+		return 1
+        fi
+        return 0
+}
+
+function throw {
+        echo "Exception at line $2: $1"
+        exit 1
+}
+
+function printAndLog {
+	echo "$1"
+	echo "$1" | systemd-cat -t $SCRIPTNAME
+}
+

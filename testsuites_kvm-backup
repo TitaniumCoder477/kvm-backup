@@ -1,0 +1,56 @@
+#!/bin/bash
+
+#
+# Globals
+#
+
+
+#
+# Imports 
+#
+
+source ./tests_kvm-backup --source-only
+
+#
+# Test suites 
+#
+
+function testsuite_verifyRequirements {
+	test_verifySudoPrivileges
+	test_verifyResticSetup
+	test_verifyKvmSetup
+}
+
+function testsuite_verifyDomainExists {
+	test_verifyDomainExistsFalse 'TEST_NONEXISTENT'
+	test_verifyDomainExistsTrue 'TEST_SHUTOFF'
+}
+
+function testsuite_verifyDomainIsRunning {
+	test_verifyDomainIsRunningFalse 'TEST_SHUTOFF'
+	test_verifyDomainIsRunningTrue 'TEST_RUNNINGDISKS' || \
+		test_verifyDomainIsRunningTrue 'TEST_RUNNINGNODISKS'
+}
+
+function testsuite_createSnapshot {
+	test_createSnapshotOfNonExistentVm 'TEST_NONEXISTENT'
+	test_createSnapshotOfShutoffVm 'TEST_SHUTOFF'
+	test_createSnapshotOfRunningVmWithoutDisks 'TEST_RUNNINGNODISKS'
+	test_createSnapshotOfRunningVmWithDisks 'TEST_RUNNINGDISKS'
+}
+
+function testsuite_removeSnapshot {
+	test_removeSnapshotFromNonExistentVm 'TEST_NONEXISTENT'
+	test_removeSnapshotFromShutoffVm 'TEST_SHUTOFF'
+	test_removeSnapshotFromRunningVmWithoutDisks 'TEST_RUNNINGNODISKS'
+	test_removeSnapshotFromRunningVmWithDisks 'TEST_RUNNINGDISKS'
+}
+
+function testsuite_backupVms {
+	test_backupVm 'TEST_SHUTOFF'
+	test_backupVm 'TEST_RUNNINGDISKS'
+}
+
+function testsuite_performRetention {
+	test_performRetention 48 14 4 3 2 
+}
