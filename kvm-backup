@@ -6,8 +6,8 @@ trap "exit" INT
 # Globals
 #
 
-source ./.repository
-source ./.key
+source ./.repository  # You can replate this line with   export REPOSITORY="/media/backups_ext"
+source ./.key  # You can replace this line with export KEY="the_name_of_your_encryption_key_to_use"
 
 #
 # Imports 
